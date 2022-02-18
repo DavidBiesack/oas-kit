@@ -45,74 +45,87 @@ function resolveAllFragment(obj, context, src, parentPath, base, options) {
     let baseUrl = url.parse(base);
     let seen = {}; // seen is indexed by the $ref value and contains path replacements
     let changes = 1;
-    while (changes) {
-        changes = 0;
-        recurse(obj, {identityDetection:true}, function (obj, key, state) {
-            if (isRef(obj, key)) {
-                if (obj[key].startsWith('#')) {
-                    if (!seen[obj[key]] && !obj.$fixed) {
-                        let target = clone(jptr(context, obj[key]));
-                        if (options.verbose>1) console.warn((target === false ? common.colour.red : common.colour.green)+'Fragment resolution', obj[key], common.colour.normal);
-                        /*
-                            ResolutionCase:A is where there is a local reference in an externally
-                            referenced document, and we have not seen it before. The reference
-                            is replaced by a copy of the data pointed to, which may be outside this fragment
-                            but within the context of the external document
-                        */
-                        if (target === false) {
-                            state.parent[state.pkey] = {}; /* case:A(2) where the resolution fails */
-                            if (options.fatal) {
-                                let ex = new Error('Fragment $ref resolution failed '+obj[key]);
-                                if (options.promise) options.promise.reject(ex)
-                                else throw ex;
-                            }
-                        }
-                        else {
-                            changes++;
-                            state.parent[state.pkey] = target;
-                            seen[obj[key]] = state.path.replace('/%24ref','');
+    let visitor = (obj, key, state) => {
+        if (isRef(obj, key)) {
+            if (obj[key].startsWith('#')) {
+                if (!seen[obj[key]] && !obj.$fixed) {
+                    let target = clone(jptr(context, obj[key]));
+                    if (options.verbose>1) console.warn((target === false ? common.colour.red : common.colour.green)+'Fragment resolution', obj[key], common.colour.normal);
+                    /*
+                        ResolutionCase:A is where there is a local reference in an externally
+                        referenced document, and we have not seen it before. The reference
+                        is replaced by a copy of the data pointed to, which may be outside this fragment
+                        but within the context of the external document
+                    */
+                    if (target === false) {
+                        state.parent[state.pkey] = {}; /* case:A(2) where the resolution fails */
+                        if (options.fatal) {
+                            let ex = new Error('Fragment $ref resolution failed '+obj[key]);
+                            if (options.promise) options.promise.reject(ex)
+                            else throw(ex);
                         }
                     }
                     else {
-                        if (!obj.$fixed) {
-                            let newRef = (attachPoint+'/'+seen[obj[key]]).split('/#/').join('/');
-                            state.parent[state.pkey] = { $ref: newRef, 'x-miro': obj[key], $fixed: true };
-                            if (options.verbose>1) console.warn('Replacing with',newRef);
-                            changes++;
-                        }
-                        /*
-                            ResolutionCase:B is where there is a local reference in an externally
-                            referenced document, and we have seen this reference before and resolved it.
-                            We create a new object containing the (immutable) $ref string
-                        */
+                        changes++;
+                        state.parent[state.pkey] = target;
+                        seen[obj[key]] = state.path.replace('/%24ref','');
                     }
                 }
-                else if (baseUrl.protocol) {
-                    let newRef = url.resolve(base,obj[key]).toString();
-                    if (options.verbose>1) console.warn(common.colour.yellow+'Rewriting external url ref',obj[key],'as',newRef,common.colour.normal);
-                    obj['x-miro'] = obj[key];
-                    if (options.externalRefs[obj[key]]) {
-                        if (!options.externalRefs[newRef]) {
-                            options.externalRefs[newRef] = options.externalRefs[obj[key]];
-                        }
-                        options.externalRefs[newRef].failed = options.externalRefs[obj[key]].failed;
+                else {
+                    if (!obj.$fixed) {
+                        let newRef = (attachPoint+'/'+seen[obj[key]]).split('/#/').join('/');
+                        state.parent[state.pkey] = { $ref: newRef, 'x-miro': obj[key], $fixed: true };
+                        if (options.verbose>1) console.warn('Replacing with',newRef);
+                        changes++;
                     }
-                    obj[key] = newRef;
-                }
-                else if (!obj['x-miro']) {
-                    let newRef = url.resolve(base,obj[key]).toString();
-                    let failed = false;
-                    if (options.externalRefs[obj[key]]) {
-                        failed = options.externalRefs[obj[key]].failed;
-                    }
-                    if (!failed) {
-                        if (options.verbose>1) console.warn(common.colour.yellow+'Rewriting external ref',obj[key],'as',newRef,common.colour.normal);
-                        obj['x-miro'] = obj[key]; // we use x-miro as a flag so we don't do this > once
-                        obj[key] = newRef;
-                    }
+                    /*
+                        ResolutionCase:B is where there is a local reference in an externally
+                        referenced document, and we have seen this reference before and resolved it.
+                        We create a new object containing the (immutable) $ref string
+                    */
                 }
             }
-        });
+            else if (baseUrl.protocol) {
+                let newRef = url.resolve(base,obj[key]).toString();
+                if (options.verbose>1) console.warn(common.colour.yellow+'Rewriting external url ref',obj[key],'as',newRef,common.colour.normal);
+                obj['x-miro'] = obj[key];
+                if (options.externalRefs[obj[key]]) {
+                    if (!options.externalRefs[newRef]) {
+                        options.externalRefs[newRef] = options.externalRefs[obj[key]];
+                    }
+                    options.externalRefs[newRef].failed = options.externalRefs[obj[key]].failed;
+                }
+                obj[key] = newRef;
+            }
+            else if (!obj['x-miro']) {
+                let newRef = url.resolve(base,obj[key]).toString();
+                let failed = false;
+                if (options.externalRefs[obj[key]]) {
+                    failed = options.externalRefs[obj[key]].failed;
+                }
+                if (!failed) {
+                    if (options.verbose>1) console.warn(common.colour.yellow+'Rewriting external ref',obj[key],'as',newRef,common.colour.normal);
+                    obj['x-miro'] = obj[key]; // we use x-miro as a flag so we don't do this > once
+                    obj[key] = newRef;
+                }
+            }
+        }
+    }
+    while (changes) {
+        // We first resolve components.schemas (OAS 3), so that resolving does not
+        // inline named parameters (this causes duplicate objects and inline schemas)
+        // within operations/responses, which in turn negatively affects code generation and DX.
+        // After processing schemas, visit all components to resolve reusable parameters, responses, etc.
+        // After that, walk the full object.
+        changes = 0;
+        context = {identityDetection:true};
+        if (obj.components) {
+            if (obj.components.schemas) {
+              recurse(obj.components.schemas, context, visitor);
+            }
+          recurse(obj.components, context, visitor);
+        }
+        recurse(obj, context, visitor);
     }
 
     recurse(obj,{},function(obj,key,state){
@@ -178,7 +191,7 @@ function resolveExternal(root, pointer, options, callback) {
                 if (options.fatal) {
                     let ex = new Error('Cached $ref resolution failed '+target+fragment);
                     if (options.promise) options.promise.reject(ex)
-                    else throw ex;
+                    else throw(ex);
                 }
             }
         }
@@ -201,7 +214,7 @@ function resolveExternal(root, pointer, options, callback) {
             })
             .catch(function(ex){
                 if (options.verbose) console.warn(ex);
-                throw ex;
+                throw(ex);
             });
     }
     else if (effectiveProtocol && effectiveProtocol.startsWith('http')) {
@@ -233,7 +246,7 @@ function resolveExternal(root, pointer, options, callback) {
                             if (options.fatal) {
                                 let ex = new Error('Remote $ref resolution failed '+target+fragment);
                                 if (options.promise) options.promise.reject(ex)
-                                else throw ex;
+                                else throw(ex);
                             }
                         }
                     }
@@ -243,7 +256,7 @@ function resolveExternal(root, pointer, options, callback) {
                 catch (ex) {
                     if (options.verbose) console.warn(ex);
                     if (options.promise && options.fatal) options.promise.reject(ex)
-                    else throw ex;
+                    else throw(ex);
                 }
                 callback(data, target, options);
                 return data;
@@ -252,7 +265,7 @@ function resolveExternal(root, pointer, options, callback) {
                 if (options.verbose) console.warn(err);
                 options.cache[target] = {};
                 if (options.promise && options.fatal) options.promise.reject(err)
-                else throw err;
+                else throw(err);
             });
     }
     else {
@@ -273,7 +286,7 @@ function resolveExternal(root, pointer, options, callback) {
                             if (options.fatal) {
                                 let ex = new Error('File $ref resolution failed '+target+fragment);
                                 if (options.promise) options.promise.reject(ex)
-                                else throw ex;
+                                else throw(ex);
                             }
                         }
                     }
@@ -283,7 +296,7 @@ function resolveExternal(root, pointer, options, callback) {
                 catch (ex) {
                     if (options.verbose) console.warn(ex);
                     if (options.promise && options.fatal) options.promise.reject(ex)
-                    else throw ex;
+                    else throw(ex);
                 }
                 callback(data, target, options);
                 return data;
@@ -291,7 +304,7 @@ function resolveExternal(root, pointer, options, callback) {
             .catch(function(err){
                 if (options.verbose) console.warn(err);
                 if (options.promise && options.fatal) options.promise.reject(err)
-                else throw err;
+                else throw(err);
             });
     }
 }
@@ -497,8 +510,8 @@ function setupOptions(options) {
         }
     }
 
-    options.externals = [];
-    options.externalRefs = {};
+    if (!options.externals) options.externals = [];
+    if (!options.externalRefs) options.externalRefs = {};
     options.rewriteRefs = true;
     options.resolver = {};
     options.resolver.depth = 0;
