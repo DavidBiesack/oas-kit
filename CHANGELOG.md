@@ -1,5 +1,11 @@
 # Change Log
 
+## oas-resolver 2.6.0
+
+* resolve `components.schemas` first, then other `components`, then rest
+  of OpenAPI doc.
+* added `jest` test
+
 ## swagger2openapi v7.0 and oas-validator v5.0
 
 * remove use of `ajv` for fallback schema validation
